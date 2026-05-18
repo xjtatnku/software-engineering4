@@ -1,0 +1,581 @@
+% -*- coding: utf-8 -*-
+\documentclass[UTF8,a4paper,12pt]{ctexart}
+
+\usepackage[left=2.6cm,right=2.6cm,top=2.7cm,bottom=2.7cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+
+\graphicspath{{report_figures/}}
+\hypersetup{hidelinks}
+\linespread{1.25}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.35em}
+\captionsetup{font=small}
+\sisetup{detect-all}
+
+\DeclareSIUnit\GiB{GiB}
+\DeclareSIUnit\MiB{MiB}
+\DeclareSIUnit\KiB{KiB}
+\DeclareSIUnit\MB{MB}
+\DeclareSIUnit\KB{KB}
+
+\lstdefinelanguage{bash}{
+    keywords={sudo,apt,install,update,cd,bash,python,python3,mysql,wsl,export,service,SELECT,FROM,WHERE},
+    sensitive=true,
+    comment=[l]{\#},
+    morestring=[b]",
+    morestring=[b]'
+}
+
+\lstdefinestyle{codeblock}{
+    basicstyle=\ttfamily\small,
+    columns=fullflexible,
+    keepspaces=true,
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    framerule=0.4pt,
+    rulecolor=\color{gray!40},
+    backgroundcolor=\color{gray!4}
+}
+\lstset{style=codeblock}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{数据安全实验报告}
+\rhead{Lab4：密文查询与 FH-OPE}
+\cfoot{\thepage}
+
+\ctexset{
+    section = {
+        format += \zihao{-3}\bfseries
+    },
+    subsection = {
+        format += \zihao{4}\bfseries
+    },
+    subsubsection = {
+        format += \normalsize\bfseries
+    }
+}
+
+\DeclareRobustCommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\placeholderfigure}[3]{
+    \begin{figure}[H]
+        \centering
+        \IfFileExists{report_figures/#1}{
+            \includegraphics[width=0.88\textwidth]{report_figures/#1}
+        }{
+            \fbox{
+                \begin{minipage}[c][5cm][c]{0.86\textwidth}
+                    \centering
+                    \vspace{0.3cm}
+                    此处插入截图：\code{#1}\\[0.4cm]
+                    \small #2
+                    \vspace{0.3cm}
+                \end{minipage}
+            }
+        }
+        \caption{#2}
+        \label{#3}
+    \end{figure}
+}
+
+\begin{document}
+
+\begin{titlepage}
+    \begin{center}
+    \IfFileExists{NKU.png}{\includegraphics[width=0.8\textwidth]{NKU.png}\\[1cm]}{\vspace*{1cm}}
+    \vspace*{1.2cm}
+    {\zihao{2}\bfseries 数据安全实验报告\par}
+    \vspace{0.8cm}
+    {\zihao{-2}\bfseries Lab4：密文查询与 FH-OPE 复现\par}
+    \vspace{1.8cm}
+
+    \renewcommand{\arraystretch}{1.5}
+    \begin{tabular}{>{\bfseries}r l}
+        姓名： & 肖俊涛 \\
+        学号： & 2313226 \\
+        专业： & 信息安全与法学 \\
+        课程： & 数据安全 \\
+        学院： & 密码与网络空间安全学院 \\
+        指导教师： & 刘哲理 \\
+    \end{tabular}
+
+    \vfill
+    {\large 密码与网络空间安全学院\par}
+    \vspace{0.4cm}
+    {\large \today\par}
+    \end{center}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+\setcounter{page}{1}
+
+\section{实验内容}
+
+本次实验主题为密文查询，重点复现实验指导书 7.3.3 节中的频率隐藏顺序保持加密（Frequency-Hiding Order-Preserving Encryption，FH-OPE）方案。顺序保持加密（Order-Preserving Encryption，OPE）能够使数据库在不解密数据的情况下根据密文或编码执行范围查询，但普通 OPE 容易泄露明文顺序和重复值频率。FH-OPE 通过随机化密文和重复值随机插入位置，使相同明文对应不同密文和不同编码，从而缓解频率泄露问题\cite{boldyreva2009ope,kerschbaum2015fhope}。
+
+本实验完成的主要工作如下：
+
+\begin{enumerate}[label=\arabic*.]
+    \item 在 WSL Ubuntu 环境中安装 MySQL、MySQL 开发头文件、C++ 编译工具和 Python 依赖，完成 FH-OPE 运行环境搭建。
+    \item 根据指导书实现编码树结构，包括内部结点、叶子结点、编码分配、重编码和结点分裂。
+    \item 将 FH-OPE 服务端逻辑封装为 MySQL UDF，注册 \code{FHInsert}、\code{FHSearch}、\code{FHUpdate}、\code{FHStart} 和 \code{FHEnd} 等函数。
+    \item 编写并完善 Python 客户端 \code{client.py}，实现随机 AES 加密、插入、范围查询和重复插入测试。
+    \item 多次插入相同明文 \code{apple}，观察编码区间压缩、编码更新、重编码和叶子结点分裂现象。
+\end{enumerate}
+
+\section{实验环境搭建}
+
+\subsection{实验环境}
+
+本实验在 Windows 主机上通过 WSL2 运行 Ubuntu 环境。项目目录位于 Windows 工作区，并通过 WSL 路径访问。实验环境配置见表 \ref{tab:env}。
+
+\begin{table}[H]
+    \centering
+    \caption{实验环境配置}
+    \label{tab:env}
+    \renewcommand{\arraystretch}{1.25}
+    \begin{tabularx}{0.92\textwidth}{>{\bfseries}p{3.2cm}X}
+        \toprule
+        项目 & 配置 \\
+        \midrule
+        主机环境 & Windows + WSL2 \\
+        WSL 发行版 & \code{Ubuntu-OSLab-Recovered} \\
+        Linux 内核 & \code{6.6.87.2-microsoft-standard-WSL2} \\
+        Python & Python 3.12.3，项目内虚拟环境 \code{.venv} \\
+        数据库 & MySQL 8.0.45 \\
+        编译工具 & \code{g++}，使用 \code{-std=c++17 -shared -fPIC} 编译 UDF \\
+        Python 依赖 & \code{pycryptodome}、\code{pymysql}、\code{cryptography} \\
+        数据库配置 & 数据库 \code{test_db}，用户 \code{user}，密码 \code{123456} \\
+        工程目录 & \code{/mnt/c/Users/xjt26/Desktop/数据安全4/fhope} \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\subsection{WSL 与系统依赖安装}
+
+进入 WSL 和实验目录：
+
+\begin{lstlisting}[language=bash,caption={进入 WSL 与实验目录}]
+wsl -d Ubuntu-OSLab-Recovered
+cd /mnt/c/Users/xjt26/Desktop/数据安全4/fhope
+\end{lstlisting}
+
+安装 MySQL、开发头文件、编译工具和 Python 虚拟环境支持：
+
+\begin{lstlisting}[language=bash,caption={安装系统依赖}]
+sudo apt update
+sudo apt install -y mysql-server default-libmysqlclient-dev \
+    build-essential python3 python3-pip python3-venv
+sudo service mysql start
+\end{lstlisting}
+
+建议截图命令如下，保存为 \code{report_figures/fig01-env.png}：
+
+\begin{lstlisting}[language=bash,caption={环境检查命令}]
+wsl -l -v
+python3 --version
+mysql --version
+mysql_config --plugindir
+\end{lstlisting}
+
+\placeholderfigure{fig01-env.png}{WSL、Python、MySQL 与 MySQL 插件目录检查结果}{fig:env}
+
+\subsection{Python 依赖安装}
+
+客户端需要使用 PyCryptodome 中的 AES 加密函数，并通过 PyMySQL 连接 MySQL。由于 MySQL 8 默认认证方式为 \code{caching_sha2_password}，PyMySQL 在该认证方式下还需要 \code{cryptography} 包。因此依赖文件如下：
+
+\begin{lstlisting}[caption={requirements.txt}]
+pycryptodome
+pymysql
+cryptography
+\end{lstlisting}
+
+创建虚拟环境并安装依赖：
+
+\begin{lstlisting}[language=bash,caption={创建虚拟环境并安装依赖}]
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --upgrade pip setuptools wheel
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    -r requirements.txt
+\end{lstlisting}
+
+\subsection{MySQL UDF 编译与数据库初始化}
+
+编译 FH-OPE 动态库并安装到 MySQL 插件目录：
+
+\begin{lstlisting}[language=bash,caption={编译并安装 UDF 动态库}]
+g++ -std=c++17 -Wall -Wextra -Wno-unused-parameter \
+    -shared -fPIC Node.cpp UDF.cpp $(mysql_config --include) \
+    -o libfhope.so
+sudo cp libfhope.so $(mysql_config --plugindir)/libfhope.so
+\end{lstlisting}
+
+本实验也提供了脚本封装：
+
+\begin{lstlisting}[language=bash,caption={使用脚本完成编译安装}]
+bash build.sh --install
+\end{lstlisting}
+
+创建数据库和用户，并导入 \code{init.sql}：
+
+\begin{lstlisting}[language=SQL,caption={数据库初始化 SQL}]
+CREATE DATABASE IF NOT EXISTS test_db;
+CREATE USER IF NOT EXISTS 'user'@'localhost' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON test_db.* TO 'user'@'localhost';
+FLUSH PRIVILEGES;
+\end{lstlisting}
+
+\begin{lstlisting}[language=bash,caption={导入 init.sql}]
+mysql test_db < init.sql
+\end{lstlisting}
+
+导入后检查表、UDF 函数和存储过程。MySQL UDF 是 MySQL 提供的可加载函数机制，可将共享库中的函数注册为 SQL 可调用函数\cite{mysqludf}。
+
+\begin{lstlisting}[language=bash,caption={数据库对象检查命令}]
+mysql -uuser -p123456 test_db -e \
+    "SHOW TABLES; SELECT COUNT(*) AS rows_in_example FROM example;"
+
+sudo mysql -N -e \
+    "SELECT name, dl FROM mysql.func WHERE name LIKE 'FH%' ORDER BY name;"
+
+mysql -uuser -p123456 test_db -e \
+    "SHOW PROCEDURE STATUS WHERE Db='test_db';"
+\end{lstlisting}
+
+建议将上述检查结果截图保存为 \code{report_figures/fig02-db-check.png}。
+
+\placeholderfigure{fig02-db-check.png}{MySQL 表、UDF 函数和存储过程注册检查}{fig:dbcheck}
+
+\section{实验原理}
+
+\subsection{OPE 与 FH-OPE}
+
+OPE 的基本目标是在密文或编码上保留明文大小关系。若明文 $m_1<m_2$，则对应编码满足：
+
+\[
+    code(m_1)<code(m_2)
+\]
+
+因此数据库可以直接基于编码列执行范围查询：
+
+\[
+    code(l) \leq encoding < code(r)
+\]
+
+但普通 OPE 会泄露明文的全序关系，并且相同明文若对应相同密文或相同编码，将直接暴露频率分布。FH-OPE 的改进点在于：相同明文多次出现时不固定映射到同一个编码，而是在该明文对应的排序区间内选择不同插入位置；同时客户端对明文使用随机加密，使相同明文得到不同密文。这样服务器只能看到有序编码和随机密文，难以直接根据重复密文统计明文频率。
+
+\subsection{编码树结构}
+
+实验中服务端维护一棵编码树，结构类似 B+ 树。内部结点用于根据排名位置选择子树，叶子结点保存密文和编码。关键数据结构见表 \ref{tab:tree}。
+
+\begin{table}[H]
+    \centering
+    \caption{FH-OPE 编码树关键结构}
+    \label{tab:tree}
+    \renewcommand{\arraystretch}{1.25}
+    \begin{tabularx}{0.92\textwidth}{>{\bfseries}p{3cm}X}
+        \toprule
+        结构或函数 & 功能 \\
+        \midrule
+        \code{InternalNode} & 保存子结点指针和各子树记录数，根据全局位置定位插入路径。 \\
+        \code{LeafNode} & 保存密文数组 \code{cipher}、编码数组 \code{encoding} 和叶子兄弟指针。 \\
+        \code{Encode(pos)} & 在相邻编码之间分配新编码；若无可用空间则触发重编码。 \\
+        \code{Recode} & 扩大更新区间并重新均匀分配编码，同时记录需要同步更新的密文。 \\
+        \code{rebalance} & 当结点元素数达到阈值 \code{M=128} 时分裂结点。 \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+设插入位置左右边界编码分别为 $L$ 和 $R$。若 $R-L\geq 2$，则可直接选择中间值：
+
+\[
+    code = R-\left\lfloor\frac{R-L}{2}\right\rfloor
+\]
+
+若 $R-L<2$，表示当前区间内已经没有整数编码可用，需要执行 \code{Recode}。重编码会选取一个或多个相邻叶子结点构成更新区间 \([start\_update,end\_update)\)，将其中元素按当前顺序重新均匀分配编码。
+
+\subsection{数据库同步机制}
+
+实验中的 \code{pro_insert} 存储过程负责插入密文和同步编码。当 \code{FHInsert} 返回非 0 编码时，说明未触发重编码，直接插入即可；当返回 0 时，说明服务端编码树发生了编码更新，需要调用 \code{FHUpdate} 更新数据库表中受影响的记录。
+
+\begin{lstlisting}[language=SQL,caption={pro_insert 中的编码同步逻辑}]
+SET i = FHInsert(pos, ct);
+INSERT INTO example(encoding, ciphertext) VALUES (i, ct);
+
+IF i = 0 THEN
+    UPDATE example
+    SET encoding = FHUpdate(ciphertext)
+    WHERE (encoding >= FHStart() AND encoding < FHEnd())
+       OR (encoding = 0);
+END IF;
+\end{lstlisting}
+
+\subsection{系统流程}
+
+整体流程如图 \ref{fig:workflow} 所示。客户端负责明文加密和位置计算，MySQL UDF 负责维护编码树，数据库表保存 \code{encoding} 与随机密文。
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        node distance=1.25cm,
+        box/.style={rectangle, rounded corners=2pt, draw=black!70, fill=gray!8, minimum width=3.2cm, minimum height=0.85cm, align=center},
+        arr/.style={-{Latex[length=2mm]}, thick}
+    ]
+        \node[box] (plain) {客户端明文};
+        \node[box, right=of plain] (enc) {随机 AES 加密\\生成密文};
+        \node[box, right=of enc] (pos) {本地计数表\\计算 pos};
+        \node[box, below=of pos] (udf) {MySQL UDF\\FHInsert/FHSearch};
+        \node[box, left=of udf] (tree) {FH-OPE 编码树\\插入/重编码/分裂};
+        \node[box, left=of tree] (table) {数据库表\\encoding,ciphertext};
+        \draw[arr] (plain) -- (enc);
+        \draw[arr] (enc) -- (pos);
+        \draw[arr] (pos) -- (udf);
+        \draw[arr] (udf) -- (tree);
+        \draw[arr] (tree) -- (table);
+        \draw[arr] (table.north) to[out=90,in=270] node[midway, above, sloped]{范围查询返回密文} (plain.south);
+    \end{tikzpicture}
+    \caption{FH-OPE 插入与查询流程}
+    \label{fig:workflow}
+\end{figure}
+
+\section{实验步骤以及实验结果}
+
+\subsection{工程文件说明}
+
+本次实验最终工程文件如表 \ref{tab:files} 所示。
+
+\begin{table}[H]
+    \centering
+    \caption{实验工程文件}
+    \label{tab:files}
+    \renewcommand{\arraystretch}{1.25}
+    \begin{tabularx}{0.92\textwidth}{>{\bfseries}p{3.5cm}X}
+        \toprule
+        文件 & 作用 \\
+        \midrule
+        \code{Node.h / Node.cpp} & 实现编码树、插入、搜索、重编码和结点分裂。 \\
+        \code{UDF.cpp} & 将 FH-OPE 操作封装为 MySQL UDF。 \\
+        \code{init.sql} & 创建数据表、注册 UDF、创建存储过程。 \\
+        \code{client.py} & 实现客户端随机加密、插入、范围查询和重复插入测试。 \\
+        \code{build.sh} & 编译并安装 \code{libfhope.so}。 \\
+        \code{simulate_repeat.cpp} & 不依赖 MySQL 的编码树模拟验证程序。 \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\subsection{基础插入与范围查询}
+
+运行基础 demo：
+
+\begin{lstlisting}[language=bash,caption={运行基础 demo}]
+cd /mnt/c/Users/xjt26/Desktop/数据安全4/fhope
+. .venv/bin/activate
+python client.py demo
+\end{lstlisting}
+
+demo 插入的数据为：
+
+\begin{lstlisting}[caption={基础 demo 数据集}]
+apple, pear, banana, orange, cherry, apple, cherry, orange
+\end{lstlisting}
+
+随后查询区间 \([b,p)\)。关键输出如下：
+
+\begin{lstlisting}[caption={基础 demo 关键输出},label={lst:demoresult}]
+insert plaintext=apple pos=0 encoding=2305843009213693952 update=[-1,-1)
+insert plaintext=pear pos=1 encoding=3458764513820540928 update=[-1,-1)
+insert plaintext=banana pos=1 encoding=2882303761517117440 update=[-1,-1)
+insert plaintext=orange pos=2 encoding=3170534137668829184 update=[-1,-1)
+insert plaintext=cherry pos=2 encoding=3026418949592973312 update=[-1,-1)
+insert plaintext=apple pos=0 encoding=1152921504606846976 update=[-1,-1)
+insert plaintext=cherry pos=4 encoding=3098476543630901248 update=[-1,-1)
+insert plaintext=orange pos=5 encoding=3134505340649865216 update=[-1,-1)
+
+search range [b, p]:
+plaintext: banana
+plaintext: cherry
+plaintext: cherry
+plaintext: orange
+plaintext: orange
+\end{lstlisting}
+
+结果说明：
+
+\begin{enumerate}[label=\arabic*.]
+    \item 相同明文多次插入时密文不同，说明随机加密有效。
+    \item 查询区间为 \([b,p)\)，因此小于 \code{b} 的 \code{apple} 不返回，右边界之后的 \code{pear} 不返回。
+    \item 返回 \code{banana}、两个 \code{cherry} 和两个 \code{orange}，说明编码顺序支持密文范围查询。
+    \item 少量数据插入时 \code{update=[-1,-1)}，说明尚未触发重编码。
+\end{enumerate}
+
+建议将 \code{python client.py demo} 的完整输出截图保存为 \code{report_figures/fig03-demo.png}。
+
+\placeholderfigure{fig03-demo.png}{基础 demo 插入和范围查询结果}{fig:demo}
+
+\subsection{重复插入同一明文}
+
+为观察编码树分裂和编码更新，运行重复插入实验：
+
+\begin{lstlisting}[language=bash,caption={重复插入同一明文}]
+python client.py repeat --value apple --count 140 --policy left
+\end{lstlisting}
+
+\code{--policy left} 表示每次都将重复值插入同一值域的最左侧，即插入位置始终为 \code{pos=0}。该策略会持续压缩最左侧编码区间，因此更容易触发重编码。若要减少截图中的输出量，可运行：
+
+\begin{lstlisting}[language=bash,caption={适合截图的精简输出命令}]
+python client.py repeat --value apple --count 140 --policy left --show-changes 0
+\end{lstlisting}
+
+关键实验结果如表 \ref{tab:repeatresult}。
+
+\begin{table}[H]
+    \centering
+    \caption{重复插入 \code{apple} 的关键结果}
+    \label{tab:repeatresult}
+    \renewcommand{\arraystretch}{1.15}
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{rrrrrrrrl}
+        \toprule
+        次数 & pos & returned & rows & changed & height & leaves & max\_leaf & event \\
+        \midrule
+        1 & 0 & 2305843009213693952 & 1 & 0 & 1 & 1 & 1 & - \\
+        10 & 0 & 4503599627370496 & 10 & 0 & 1 & 1 & 10 & - \\
+        20 & 0 & 4398046511104 & 20 & 0 & 1 & 1 & 20 & - \\
+        40 & 0 & 4194304 & 40 & 0 & 1 & 1 & 40 & - \\
+        50 & 0 & 4096 & 50 & 0 & 1 & 1 & 50 & - \\
+        60 & 0 & 4 & 60 & 0 & 1 & 1 & 60 & - \\
+        63 & 0 & 0 & 63 & 62 & 1 & 1 & 63 & recode \\
+        64 & 0 & 0 & 64 & 63 & 1 & 1 & 64 & recode \\
+        128 & 0 & 0 & 128 & 127 & 2 & 2 & 64 & recode,split \\
+        129 & 0 & 0 & 129 & 64 & 2 & 2 & 65 & recode \\
+        140 & 0 & 0 & 140 & 75 & 2 & 2 & 76 & recode \\
+        \bottomrule
+    \end{tabular}
+    }
+\end{table}
+
+从结果可以看出，前 60 次插入时编码不断减半但仍有空间。第 63 次时 \code{returned=0}，\code{event=recode}，说明左端编码区间已无足够整数空间，触发了重编码。此时 \code{changed=62}，表示已有 62 条记录的编码被同步更新。
+
+第 128 次时出现 \code{recode,split}。由于叶子结点容量阈值为 \code{M=128}，插入达到阈值后叶子结点分裂，树高由 1 变为 2，叶子结点数量由 1 变为 2，最大叶子大小变为 64。
+
+建议将重复插入输出截图保存为 \code{report_figures/fig04-repeat.png}。
+
+\placeholderfigure{fig04-repeat.png}{重复插入同一明文触发重编码和叶子分裂}{fig:repeat}
+
+\subsection{数据库最终状态验证}
+
+重复插入实验结束后，查询数据库表和编码树统计信息：
+
+\begin{lstlisting}[language=bash,caption={数据库最终状态查询}]
+mysql -uuser -p123456 test_db -e "
+SELECT COUNT(*) AS rows_in_example,
+       COUNT(DISTINCT encoding) AS distinct_encoding,
+       MIN(encoding) AS min_encoding,
+       MAX(encoding) AS max_encoding
+FROM example;
+
+SELECT FHTotalCount() AS tree_total,
+       FHHeight() AS height,
+       FHLeafCount() AS leaf_count,
+       FHMaxLeafSize() AS max_leaf_size;"
+\end{lstlisting}
+
+最终统计结果见表 \ref{tab:finalstats}。
+
+\begin{table}[H]
+    \centering
+    \caption{重复插入 140 次后的最终统计}
+    \label{tab:finalstats}
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabular}{lr}
+        \toprule
+        指标 & 结果 \\
+        \midrule
+        数据库行数 \code{rows} & 140 \\
+        不同编码数量 \code{distinct\_encoding} & 140 \\
+        编码树记录数 \code{tree\_total} & 140 \\
+        编码树高度 \code{height} & 2 \\
+        叶子结点数量 \code{leaf\_count} & 2 \\
+        最大叶子大小 \code{max\_leaf\_size} & 76 \\
+        最小编码 \code{min\_encoding} & 0 \\
+        最大编码 \code{max\_encoding} & 4575657221408423936 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+数据库行数、不同编码数量和编码树记录数均为 140，说明数据库表与服务端编码树状态一致。树高为 2、叶子结点数为 2，与第 128 次插入时观察到的叶子分裂一致。
+
+需要注意的是，最终 \code{min_encoding=0}。这是本实现中的特殊现象：\code{Recode} 会从左边界 0 开始重新分配编码，而 \code{FHInsert} 又使用返回值 0 表示“触发重编码”。因此 0 同时具有合法编码和更新信号两种含义。该设计不影响本次实验观察，但从工程角度看，应将状态信号与编码值分离，例如额外返回状态码。
+
+建议将最终状态查询结果截图保存为 \code{report_figures/fig05-final-stats.png}。
+
+\placeholderfigure{fig05-final-stats.png}{数据库表与编码树最终状态验证}{fig:finalstats}
+
+\section{实验总结与反思}
+
+本次实验完成了 FH-OPE 方案从服务端到客户端的端到端复现。实验中搭建了 WSL Ubuntu、MySQL、C++ UDF 和 Python 虚拟环境，实现了密文插入、范围查询、重复插入和编码树状态观察。基础 demo 证明了数据库可以基于编码列完成密文范围查询；重复插入实验则直观展示了编码空间被压缩后触发重编码，以及叶子结点达到阈值后发生分裂的过程。
+
+实验过程中解决的主要问题包括：
+
+\begin{enumerate}[label=\arabic*.]
+    \item 指导书中存在包名和库名不一致的问题，例如 Python 包应为 \code{pymysql}，动态库统一为 \code{libfhope.so}。
+    \item MySQL 8 默认认证方式需要 PyMySQL 配合 \code{cryptography} 使用，否则客户端连接会报错。
+    \item MySQL UDF 必须复制到 \code{mysql_config --plugindir} 指定的插件目录，并通过 \code{CREATE FUNCTION ... SONAME} 注册。
+    \item 编码树保存在 MySQL 进程内存中，实验时需要通过 \code{FHReset()} 和 \code{TRUNCATE TABLE example} 保持内存树与数据库表一致。
+\end{enumerate}
+
+从安全性角度看，FH-OPE 仍然会泄露明文之间的相对顺序，因此不能达到普通随机加密的语义安全强度。但它通过随机密文和重复值分散编码位置，降低了相同明文重复出现时的频率泄露。在需要支持高效范围查询的密文数据库场景中，FH-OPE 体现了查询功能与泄露控制之间的折中。
+
+本实验也暴露出一些工程局限：极端插入策略下重编码会频繁发生，数据库更新开销较大；编码 0 兼作合法值和重编码信号，语义不够清晰；编码树缺少持久化机制，MySQL 重启后需要重新初始化。后续若要改进，可将重编码状态与编码值分离，引入持久化树结构，并进一步评估不同插入策略下的更新代价。
+
+\begin{thebibliography}{9}
+
+\bibitem{boldyreva2009ope}
+Alexandra Boldyreva, Nathan Chenette, Younho Lee, and Adam O'Neill.
+\newblock Order-Preserving Symmetric Encryption.
+\newblock In \emph{Advances in Cryptology -- EUROCRYPT 2009}, LNCS 5479, pp. 224--241, Springer, 2009.
+\newblock DOI: \url{https://doi.org/10.1007/978-3-642-01001-9_13}.
+
+\bibitem{kerschbaum2015fhope}
+Florian Kerschbaum.
+\newblock Frequency-Hiding Order-Preserving Encryption.
+\newblock In \emph{Proceedings of the 22nd ACM SIGSAC Conference on Computer and Communications Security}, pp. 656--667, ACM, 2015.
+\newblock DOI: \url{https://doi.org/10.1145/2810103.2813629}.
+
+\bibitem{mysqludf}
+Oracle.
+\newblock MySQL 8.0 Reference Manual: MySQL Server Loadable Functions.
+\newblock \url{https://dev.mysql.com/doc/refman/8.0/en/server-loadable-functions.html}.
+
+\bibitem{pymysql}
+PyMySQL Project.
+\newblock PyMySQL package documentation and distribution page.
+\newblock \url{https://pypi.org/project/PyMySQL/}.
+
+\end{thebibliography}
+
+\end{document}

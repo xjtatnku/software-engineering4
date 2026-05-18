@@ -1,0 +1,53 @@
+DROP TABLE IF EXISTS example;
+
+CREATE TABLE example
+(
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    encoding BIGINT NOT NULL,
+    ciphertext VARCHAR(512) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_encoding (encoding)
+);
+
+DROP FUNCTION IF EXISTS FHInsert;
+DROP FUNCTION IF EXISTS FHSearch;
+DROP FUNCTION IF EXISTS FHUpdate;
+DROP FUNCTION IF EXISTS FHStart;
+DROP FUNCTION IF EXISTS FHEnd;
+DROP FUNCTION IF EXISTS FHReset;
+DROP FUNCTION IF EXISTS FHTotalCount;
+DROP FUNCTION IF EXISTS FHHeight;
+DROP FUNCTION IF EXISTS FHLeafCount;
+DROP FUNCTION IF EXISTS FHMaxLeafSize;
+
+CREATE FUNCTION FHInsert RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHSearch RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHUpdate RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHStart RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHEnd RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHReset RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHTotalCount RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHHeight RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHLeafCount RETURNS INTEGER SONAME 'libfhope.so';
+CREATE FUNCTION FHMaxLeafSize RETURNS INTEGER SONAME 'libfhope.so';
+
+DROP PROCEDURE IF EXISTS pro_insert;
+
+DELIMITER $$
+CREATE PROCEDURE pro_insert(IN pos INT, IN ct VARCHAR(512))
+BEGIN
+    DECLARE i BIGINT DEFAULT 0;
+
+    SET i = FHInsert(pos, ct);
+    INSERT INTO example(encoding, ciphertext) VALUES (i, ct);
+
+    IF i = 0 THEN
+        UPDATE example
+        SET encoding = FHUpdate(ciphertext)
+        WHERE (encoding >= FHStart() AND encoding < FHEnd())
+           OR (encoding = 0);
+    END IF;
+
+    SELECT i AS inserted_encoding, FHStart() AS update_start, FHEnd() AS update_end;
+END $$
+DELIMITER ;
